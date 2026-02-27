@@ -231,42 +231,42 @@
     // - grayscale
     // - threshold (흰 글자/검은 배경 -> 검은 글자/흰 배경으로 반전)
     // -----------------------------
-    function preprocessNameRoi(srcCanvas, dstCanvas) {
-      const scale = 3; // OCR 정확도 향상용 업스케일
+    function preprocessNameRoiSoft(srcCanvas, dstCanvas) {
+      const scale = 4; // 3 -> 4 권장 (한글 획 보존)
       dstCanvas.width = srcCanvas.width * scale;
       dstCanvas.height = srcCanvas.height * scale;
-
+    
       const dctx = dstCanvas.getContext("2d", { willReadFrequently: true });
-      dctx.imageSmoothingEnabled = false;
+    
+      // ✅ nearest-neighbor 금지 (한글 깨짐 유발)
+      dctx.imageSmoothingEnabled = true;
+      dctx.imageSmoothingQuality = "high";
+    
+      dctx.clearRect(0, 0, dstCanvas.width, dstCanvas.height);
       dctx.drawImage(srcCanvas, 0, 0, dstCanvas.width, dstCanvas.height);
-
+    
       const img = dctx.getImageData(0, 0, dstCanvas.width, dstCanvas.height);
       const data = img.data;
-
-      // 간단한 grayscale + contrast + threshold + invert
+    
+      // grayscale + 약한 contrast (너무 세게 하지 않음)
       for (let i = 0; i < data.length; i += 4) {
         const r = data[i];
         const g = data[i + 1];
         const b = data[i + 2];
-
-        // luminance
+    
         let y = 0.299 * r + 0.587 * g + 0.114 * b;
-
-        // contrast boost (검은 배경/흰 글자 대비 강화)
-        y = (y - 128) * 1.8 + 128;
+    
+        // contrast boost를 약하게
+        y = (y - 128) * 1.15 + 128;
         if (y < 0) y = 0;
         if (y > 255) y = 255;
-
-        // threshold
-        // 이름 글자는 흰색, 배경은 검정이므로 -> 반전해서 "검정 글자 / 흰 배경" 형태로 만듦
-        const v = (y > 145) ? 0 : 255;
-
-        data[i] = v;
-        data[i + 1] = v;
-        data[i + 2] = v;
+    
+        data[i] = y;
+        data[i + 1] = y;
+        data[i + 2] = y;
         data[i + 3] = 255;
       }
-
+    
       dctx.putImageData(img, 0, 0);
     }
 
@@ -275,23 +275,21 @@
     // -----------------------------
     async function initOcrWorker() {
       if (ocrReady) return;
-      setStatus("OCR 엔진 초기화 중... (처음 1회는 조금 걸릴 수 있음)");
-
-      // tesseract.js 버전에 따라 createWorker 시그니처가 조금 다를 수 있음
-      // CDN v5 기준 동작 형태
-      ocrWorker = await Tesseract.createWorker("kor+eng", 1, {
+      setStatus("OCR 엔진 초기화 중...");
+    
+      // ✅ 먼저 kor만 사용해서 테스트 (영어로 도망가는 현상 줄이기)
+      ocrWorker = await Tesseract.createWorker("kor", 1, {
         logger: (m) => {
-          // 필요 시 로깅
-          // console.log("OCR", m);
+          // console.log(m);
         }
       });
-
-      // PSM 8 = single word (버전별 상수 접근이 다를 수 있어 숫자로 지정)
+    
       await ocrWorker.setParameters({
-        tessedit_pageseg_mode: "8",
+        tessedit_pageseg_mode: "7",   // single line (8보다 안정적인 경우 많음)
         preserve_interword_spaces: "0",
+        user_defined_dpi: "300"       // 확대 이미지 OCR 안정화 도움
       });
-
+    
       ocrReady = true;
       setStatus("OCR 엔진 준비 완료 ✅");
     }
@@ -383,6 +381,76 @@
       }
     }
 
+    function hangulRatio(s) {
+      if (!s) return 0;
+      const clean = String(s).replace(/\s+/g, "");
+      if (!clean) return 0;
+      const m = clean.match(/[가-힣]/g) || [];
+      return m.length / clean.length;
+    }
+    
+    function scoreNameCandidate(text, conf = 0) {
+      const cleaned = cleanOcrName(text);
+      if (!cleaned) return -999;
+    
+      // 한글 비율 가산점 크게
+      const hRatio = hangulRatio(cleaned);
+      let score = conf * 0.6 + hRatio * 100;
+    
+      // 길이 보정 (닉네 이름은 대체로 2~6자)
+      if (cleaned.length >= 2 && cleaned.length <= 6) score += 10;
+      else score -= Math.abs(cleaned.length - 4) * 3;
+    
+      return score;
+    }
+    
+    async function recognizeNameWithVariants() {
+      // roiCanvas는 원본 ROI가 이미 들어있다고 가정
+      const tempSoft = document.createElement("canvas");
+      const tempBin = document.createElement("canvas");
+    
+      preprocessNameRoiSoft(roiCanvas, tempSoft);
+      preprocessNameRoiBinary(roiCanvas, tempBin);
+    
+      // 디버그 표시용으로는 soft 버전 먼저 보여주기
+      ocrCanvas.width = tempSoft.width;
+      ocrCanvas.height = tempSoft.height;
+      ocrCanvas.getContext("2d").drawImage(tempSoft, 0, 0);
+    
+      const results = [];
+    
+      // 후보 1: soft(gray)
+      {
+        const ret = await ocrWorker.recognize(tempSoft);
+        results.push({
+          mode: "soft",
+          raw: ret?.data?.text ?? "",
+          conf: ret?.data?.confidence ?? 0
+        });
+      }
+    
+      // 후보 2: binary
+      {
+        const ret = await ocrWorker.recognize(tempBin);
+        results.push({
+          mode: "binary",
+          raw: ret?.data?.text ?? "",
+          conf: ret?.data?.confidence ?? 0
+        });
+      }
+    
+      // 점수 계산
+      let best = null;
+      for (const r of results) {
+        const cleaned = cleanOcrName(r.raw);
+        const score = scoreNameCandidate(cleaned, r.conf);
+        const item = { ...r, cleaned, score };
+        if (!best || item.score > best.score) best = item;
+      }
+    
+      return { best, all: results };
+    }
+
     // -----------------------------
     // 6) 현재 프레임에서 이름 추출
     // -----------------------------
@@ -404,26 +472,23 @@
         captureRoiFromVideo(videoEl, roiPx, roiCanvas);
 
         // OCR 전처리
-        preprocessNameRoi(roiCanvas, ocrCanvas);
-
-        // OCR 실행
-        const ret = await ocrWorker.recognize(ocrCanvas);
-        const rawText = ret?.data?.text ?? "";
-        let name = cleanOcrName(rawText);
-
-        // 선택: 이름 사전으로 보정
+        const recog = await recognizeNameWithVariants();
+        const rawText = recog?.best?.raw ?? "";
+        let name = recog?.best?.cleaned ?? "";
+        
         if (name) {
           name = correctByKnownNames(name);
         }
-
+        
         detectedName = name || "";
         setResult(detectedName);
-
+        
         setStatus([
           "이름 OCR 완료 ✅",
           `레이아웃 분류: ${mode}`,
           `프레임 크기: ${frameW} x ${frameH}`,
           `ROI(px): x=${roiPx.x}, y=${roiPx.y}, w=${roiPx.w}, h=${roiPx.h}`,
+          `선택 전처리: ${recog?.best?.mode ?? "-"}`,
           `OCR 원문: ${JSON.stringify(rawText)}`,
           `정리 결과: ${detectedName || "(없음)"}`
         ].join("\n"));
