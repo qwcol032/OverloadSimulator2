@@ -109,11 +109,6 @@
     const ocrCanvas = document.getElementById("ocrCanvas");
 
     let captureStream = null;
-    let ocrWorker = null;
-    let ocrReady = false;
-    let ocrBusy = false;
-    let ocrLoopTimer = null;
-    let detectedName = "";
 
     // 필요하면 이름 후보 목록(JSON) 로드해서 OCR 결과 보정 가능
     // 예: /data/names.json => ["앨리스","홍련","라푼젤", ...]
