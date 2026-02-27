@@ -224,31 +224,112 @@
         0, 0, roiPx.w, roiPx.h
       );
     }
-
-    // -----------------------------
-    // 3) OCR 전처리
-    // - 확대
-    // - grayscale
-    // - threshold (흰 글자/검은 배경 -> 검은 글자/흰 배경으로 반전)
-    // -----------------------------
+    
+    /*********************************************************
+     * OCR + 슬라이드(마키) 이름 대응 통합본
+     * - 한글 친화 전처리(soft/binary)
+     * - OCR 후보 2개 비교
+     * - 여러 프레임 조각 수집 후 names.json 매칭
+     *********************************************************/
+    
+    // ===== 상태 변수 =====
+    let ocrWorker = null;
+    let ocrReady = false;
+    let ocrBusy = false;
+    
+    let ocrLoopTimer = null;
+    let nameFragments = [];
+    let lastResolvedName = "";
+    
+    // 디버그용 마지막 정보
+    let lastNameOcrDebug = {
+      mode: "",
+      frameW: 0,
+      frameH: 0,
+      roiPx: null,
+      fragments: [],
+      rawCandidates: []
+    };
+    
+    // ===== 조정 파라미터 =====
+    const OCR_NAME_LOOP_INTERVAL_MS = 1200;     // 자동 루프 간격(마키 샘플링 포함이라 넉넉히)
+    const MARQUEE_SAMPLE_DURATION_MS = 1800;    // 슬라이드 이름 조각 수집 시간
+    const MARQUEE_SAMPLE_INTERVAL_MS = 180;     // 조각 수집 간격
+    const NAME_ROI_EXTRA_LEFT_FOR_MARQUEE = 0.12; // 긴 이름이 좌측으로 흘러갈 때 대비: ROI를 왼쪽으로 약간 확장(ROI 폭 비율)
+    
+    // ROI 내에서 텍스트 부분만 다시 자르고 싶다면 활성화 (선택)
+    // 현재 false로 두고, 필요시 true로 바꿔서 미세조정
+    const USE_NAME_SUBROI = false;
+    // ROI 내부 기준 비율 (예시) - 필요시 직접 튜닝
+    const NAME_SUBROI = { x: 0.00, y: 0.05, w: 1.00, h: 0.90 }; // 이름판 전체를 거의 그대로 사용
+    
+    function sleep(ms) {
+      return new Promise(r => setTimeout(r, ms));
+    }
+    
+    /*********************************************************
+     * 1) 문자열 정규화 / 후처리
+     *********************************************************/
+    function normalizeNameForMatch(s) {
+      if (!s) return "";
+      return String(s)
+        .normalize("NFC")
+        .replace(/\s+/g, "")             // 공백 제거
+        .replace(/[：]/g, ":")           // 전각 콜론 -> 일반 콜론
+        .replace(/\s*:\s*/g, ":")        // 콜론 주변 공백 제거
+        .replace(/[‘’´`]/g, "'")
+        .replace(/[“”"]/g, '"')
+        .replace(/[^0-9A-Za-z가-힣:()]/g, "");
+    }
+    
+    function cleanOcrName(raw) {
+      if (!raw) return "";
+    
+      let s = String(raw)
+        .normalize("NFC")
+        .replace(/\r?\n/g, "")
+        .replace(/\s+/g, "")
+        .replace(/[|]/g, "I")
+        .replace(/[：]/g, ":")
+        .replace(/[“”"']/g, "")
+        .trim();
+    
+      // 비교 가능한 문자만 남김
+      s = s.replace(/[^0-9A-Za-z가-힣:()]/g, "");
+    
+      if (!s) return "";
+      return s;
+    }
+    
+    function hangulRatio(s) {
+      if (!s) return 0;
+      const t = String(s).replace(/\s+/g, "");
+      if (!t) return 0;
+      const m = t.match(/[가-힣]/g) || [];
+      return m.length / t.length;
+    }
+    
+    /*********************************************************
+     * 2) 전처리 (한글 친화)
+     * - soft(gray) : 주력
+     * - binary     : 보조 후보
+     *********************************************************/
     function preprocessNameRoiSoft(srcCanvas, dstCanvas) {
-      const scale = 4; // 3 -> 4 권장 (한글 획 보존)
-      dstCanvas.width = srcCanvas.width * scale;
-      dstCanvas.height = srcCanvas.height * scale;
+      const scale = 4; // 한글 획 보존 위해 4배 권장
+      dstCanvas.width = Math.max(1, srcCanvas.width * scale);
+      dstCanvas.height = Math.max(1, srcCanvas.height * scale);
     
       const dctx = dstCanvas.getContext("2d", { willReadFrequently: true });
+      dctx.clearRect(0, 0, dstCanvas.width, dstCanvas.height);
     
-      // ✅ nearest-neighbor 금지 (한글 깨짐 유발)
+      // ✅ 한글 깨짐 방지: smoothing ON
       dctx.imageSmoothingEnabled = true;
       dctx.imageSmoothingQuality = "high";
-    
-      dctx.clearRect(0, 0, dstCanvas.width, dstCanvas.height);
       dctx.drawImage(srcCanvas, 0, 0, dstCanvas.width, dstCanvas.height);
     
       const img = dctx.getImageData(0, 0, dstCanvas.width, dstCanvas.height);
       const data = img.data;
     
-      // grayscale + 약한 contrast (너무 세게 하지 않음)
       for (let i = 0; i < data.length; i += 4) {
         const r = data[i];
         const g = data[i + 1];
@@ -256,7 +337,7 @@
     
         let y = 0.299 * r + 0.587 * g + 0.114 * b;
     
-        // contrast boost를 약하게
+        // 약한 대비 강화 (과하면 한글 획이 뭉개짐)
         y = (y - 128) * 1.15 + 128;
         if (y < 0) y = 0;
         if (y > 255) y = 255;
@@ -269,7 +350,7 @@
     
       dctx.putImageData(img, 0, 0);
     }
-
+    
     function preprocessNameRoiBinary(srcCanvas, dstCanvas) {
       preprocessNameRoiSoft(srcCanvas, dstCanvas);
     
@@ -277,13 +358,13 @@
       const img = dctx.getImageData(0, 0, dstCanvas.width, dstCanvas.height);
       const data = img.data;
     
-      // 고정 threshold를 너무 높게 잡지 말기
-      // 흰 글자/검은 배경 -> 검은 글자/흰 배경으로 반전
+      // 고정 threshold는 너무 세지 않게
       const TH = 160;
     
       for (let i = 0; i < data.length; i += 4) {
-        const y = data[i]; // grayscale 상태
-        const v = (y > TH) ? 0 : 255; // invert
+        const y = data[i]; // grayscale
+        // 흰 글자 / 어두운 배경 -> 반전해서 검정글자/흰배경 형태
+        const v = (y > TH) ? 0 : 255;
         data[i] = v;
         data[i + 1] = v;
         data[i + 2] = v;
@@ -292,30 +373,445 @@
     
       dctx.putImageData(img, 0, 0);
     }
-
-    // -----------------------------
-    // 4) OCR 초기화
-    // -----------------------------
+    
+    /*********************************************************
+     * 3) OCR 초기화 (kor 우선)
+     *********************************************************/
     async function initOcrWorker() {
       if (ocrReady) return;
-      setStatus("OCR 엔진 초기화 중...");
     
-      // ✅ 먼저 kor만 사용해서 테스트 (영어로 도망가는 현상 줄이기)
+      setStatus("OCR 엔진 초기화 중... (처음 1회는 조금 걸릴 수 있음)");
+    
+      // Tesseract.js v5 CDN 기준
       ocrWorker = await Tesseract.createWorker("kor", 1, {
         logger: (m) => {
-          // console.log(m);
+          // console.log("OCR:", m);
         }
       });
     
       await ocrWorker.setParameters({
-        tessedit_pageseg_mode: "7",   // single line (8보다 안정적인 경우 많음)
+        tessedit_pageseg_mode: "7",   // single line
         preserve_interword_spaces: "0",
-        user_defined_dpi: "300"       // 확대 이미지 OCR 안정화 도움
+        user_defined_dpi: "300"
       });
     
       ocrReady = true;
       setStatus("OCR 엔진 준비 완료 ✅");
     }
+    
+    /*********************************************************
+     * 4) OCR 후보 점수 계산 (soft vs binary 선택)
+     *********************************************************/
+    function scoreNameCandidateText(text, conf = 0) {
+      const cleaned = cleanOcrName(text);
+      if (!cleaned) return -999;
+    
+      const hRatio = hangulRatio(cleaned);
+      let score = conf * 0.6 + hRatio * 100;
+    
+      // 이름 길이 휴리스틱 (2~10자 정도 보정)
+      if (cleaned.length >= 1 && cleaned.length <= 12) score += 8;
+      else score -= Math.abs(cleaned.length - 6) * 2;
+    
+      // 한글이 하나도 없으면 (영문으로 도망간 경우) 약간 감점
+      if ((cleaned.match(/[가-힣]/g) || []).length === 0) {
+        score -= 20;
+      }
+    
+      return score;
+    }
+    
+    async function recognizeNameWithVariants() {
+      // roiCanvas에 원본 ROI가 이미 들어있다고 가정
+      const tempSoft = document.createElement("canvas");
+      const tempBin = document.createElement("canvas");
+    
+      preprocessNameRoiSoft(roiCanvas, tempSoft);
+      preprocessNameRoiBinary(roiCanvas, tempBin);
+    
+      // 디버그 표시용: soft 버전 보여주기
+      ocrCanvas.width = tempSoft.width;
+      ocrCanvas.height = tempSoft.height;
+      ocrCanvas.getContext("2d").drawImage(tempSoft, 0, 0);
+    
+      const results = [];
+    
+      {
+        const ret = await ocrWorker.recognize(tempSoft);
+        results.push({
+          mode: "soft",
+          raw: ret?.data?.text ?? "",
+          conf: ret?.data?.confidence ?? 0
+        });
+      }
+    
+      {
+        const ret = await ocrWorker.recognize(tempBin);
+        results.push({
+          mode: "binary",
+          raw: ret?.data?.text ?? "",
+          conf: ret?.data?.confidence ?? 0
+        });
+      }
+    
+      let best = null;
+      const normalized = [];
+    
+      for (const r of results) {
+        const cleaned = cleanOcrName(r.raw);
+        const score = scoreNameCandidateText(cleaned, r.conf);
+        const item = { ...r, cleaned, score };
+        normalized.push(item);
+        if (!best || item.score > best.score) best = item;
+      }
+    
+      lastNameOcrDebug.rawCandidates = normalized;
+      return { best, all: normalized };
+    }
+    
+    /*********************************************************
+     * 5) ROI 보정 (마키 대응용 좌측 확장 + 선택적 서브 ROI)
+     *********************************************************/
+    function clampPxRect(rect, frameW, frameH) {
+      let x = Math.max(0, rect.x);
+      let y = Math.max(0, rect.y);
+      let w = Math.max(1, rect.w);
+      let h = Math.max(1, rect.h);
+    
+      if (x + w > frameW) w = frameW - x;
+      if (y + h > frameH) h = frameH - y;
+    
+      return {
+        x: Math.max(0, x),
+        y: Math.max(0, y),
+        w: Math.max(1, w),
+        h: Math.max(1, h)
+      };
+    }
+    
+    function expandNameRoiForMarquee(roiPx, frameW, frameH) {
+      const addLeft = Math.round(roiPx.w * NAME_ROI_EXTRA_LEFT_FOR_MARQUEE);
+      return clampPxRect({
+        x: roiPx.x - addLeft,
+        y: roiPx.y,
+        w: roiPx.w + addLeft,
+        h: roiPx.h
+      }, frameW, frameH);
+    }
+    
+    function applySubRoiOnCanvas(srcCanvas, subRectNorm, dstCanvas) {
+      const sx = Math.round(srcCanvas.width * subRectNorm.x);
+      const sy = Math.round(srcCanvas.height * subRectNorm.y);
+      const sw = Math.round(srcCanvas.width * subRectNorm.w);
+      const sh = Math.round(srcCanvas.height * subRectNorm.h);
+    
+      dstCanvas.width = Math.max(1, sw);
+      dstCanvas.height = Math.max(1, sh);
+    
+      const dctx = dstCanvas.getContext("2d", { willReadFrequently: true });
+      dctx.clearRect(0, 0, dstCanvas.width, dstCanvas.height);
+      dctx.drawImage(srcCanvas, sx, sy, sw, sh, 0, 0, dstCanvas.width, dstCanvas.height);
+    }
+    
+    /*********************************************************
+     * 6) 조각(fragment) 누적 및 names.json 기반 최종 해석
+     *********************************************************/
+    function addNameFragment(fragment) {
+      const raw = (fragment || "").trim();
+      if (!raw) return;
+    
+      const norm = normalizeNameForMatch(raw);
+      if (!norm) return;
+    
+      // 너무 짧은 조각은 노이즈 제거 (단, 1글자 이름 예외)
+      const allowShortSingles = new Set(["D", "K"]);
+      if (norm.length < 2 && !allowShortSingles.has(norm)) return;
+    
+      // 중복 방지
+      if (!nameFragments.includes(norm)) {
+        nameFragments.push(norm);
+      }
+    
+      // 최대 20개만 유지
+      if (nameFragments.length > 20) {
+        nameFragments = nameFragments.slice(-20);
+      }
+    }
+    
+    function fuzzyContains(text, frag, maxDist = 1) {
+      if (!text || !frag) return false;
+      if (text.includes(frag)) return true;
+    
+      const targetLen = frag.length;
+      if (targetLen <= 0 || text.length < targetLen) return false;
+    
+      for (let i = 0; i <= text.length - targetLen; i++) {
+        const part = text.slice(i, i + targetLen);
+        if (levenshtein(part, frag) <= maxDist) return true;
+      }
+      return false;
+    }
+    
+    function scoreCandidateByFragments(candidate, fragments) {
+      const candNorm = normalizeNameForMatch(candidate);
+      if (!candNorm) return -9999;
+    
+      let score = 0;
+      let matchedCount = 0;
+    
+      for (const frag of fragments) {
+        if (!frag) continue;
+    
+        if (candNorm.includes(frag)) {
+          score += 20 + frag.length * frag.length; // 긴 조각 가중치 크게
+          matchedCount++;
+          continue;
+        }
+    
+        // OCR 오타 대응 (길이가 충분히 길 때만 가볍게 fuzzy)
+        const maxDist = frag.length >= 5 ? 1 : 0;
+        if (maxDist > 0 && fuzzyContains(candNorm, frag, maxDist)) {
+          score += 8 + frag.length * 1.5;
+          matchedCount++;
+          continue;
+        }
+      }
+    
+      // 콜론 포함 이름은 "조각 여러 개"가 모일수록 유리하게
+      if (candNorm.includes(":")) {
+        score += matchedCount * 8;
+      }
+    
+      // 조각이 매우 짧고 적을 때 콜론 이름 과대평가 방지
+      if (fragments.length <= 2 && fragments.every(f => f.length <= 3)) {
+        if (candNorm.includes(":")) score -= 6;
+      }
+    
+      // 완전 일치 조각이 있으면 큰 보너스
+      if (fragments.includes(candNorm)) {
+        score += 100;
+      }
+    
+      return score;
+    }
+    
+    function resolveNameFromFragments(fragments, knownNames) {
+      if (!knownNames || !knownNames.length) {
+        const bestFrag = [...fragments].sort((a, b) => b.length - a.length)[0] || "";
+        return { name: bestFrag, confidence: 0, ambiguous: true, top2: [] };
+      }
+    
+      const scored = knownNames.map(name => ({
+        name,
+        score: scoreCandidateByFragments(name, fragments)
+      }))
+      .sort((a, b) => b.score - a.score);
+    
+      const best = scored[0];
+      const second = scored[1];
+    
+      if (!best) {
+        return { name: "", confidence: 0, ambiguous: true, top2: [] };
+      }
+    
+      const gap = second ? (best.score - second.score) : best.score;
+      const ambiguous = gap < 10;
+    
+      return {
+        name: best.name,
+        confidence: best.score,
+        ambiguous,
+        top2: scored.slice(0, 2)
+      };
+    }
+    
+    /*********************************************************
+     * 7) 단일 패스 OCR (조각만 반환, 확정 X)
+     *********************************************************/
+    async function extractNameOnceSinglePassNoCommit() {
+      if (!captureStream || !videoEl.srcObject) return "";
+      if (!ocrReady) await initOcrWorker();
+      if (!videoEl.videoWidth || !videoEl.videoHeight) return "";
+    
+      const frameW = videoEl.videoWidth;
+      const frameH = videoEl.videoHeight;
+    
+      const { mode, roi: roiNorm } = getActiveNameRoi(frameW, frameH);
+      let roiPx = normToPxRect(roiNorm, frameW, frameH);
+    
+      // 긴 이름 슬라이드 대응: 왼쪽 약간 확장
+      roiPx = expandNameRoiForMarquee(roiPx, frameW, frameH);
+    
+      // 원본 ROI 캡처
+      captureRoiFromVideo(videoEl, roiPx, roiCanvas);
+    
+      // 선택적으로 텍스트 서브 ROI만 추출해서 OCR
+      if (USE_NAME_SUBROI) {
+        const temp = document.createElement("canvas");
+        temp.width = roiCanvas.width;
+        temp.height = roiCanvas.height;
+        temp.getContext("2d").drawImage(roiCanvas, 0, 0);
+        applySubRoiOnCanvas(temp, NAME_SUBROI, roiCanvas);
+      }
+    
+      const recog = await recognizeNameWithVariants();
+      const piece = recog?.best?.cleaned ?? "";
+    
+      // 디버그 저장
+      lastNameOcrDebug.mode = mode;
+      lastNameOcrDebug.frameW = frameW;
+      lastNameOcrDebug.frameH = frameH;
+      lastNameOcrDebug.roiPx = { ...roiPx };
+    
+      return piece;
+    }
+    
+    /*********************************************************
+     * 8) 슬라이드(마키) 대응 최종 추출
+     * - 여러 프레임 조각 수집 -> names.json 후보 확정
+     *********************************************************/
+    async function extractNameWithMarqueeSampling({
+      durationMs = MARQUEE_SAMPLE_DURATION_MS,
+      intervalMs = MARQUEE_SAMPLE_INTERVAL_MS
+    } = {}) {
+      if (ocrBusy) return null;
+      if (!captureStream || !videoEl.videoWidth || !videoEl.videoHeight) return null;
+    
+      ocrBusy = true;
+      try {
+        if (!ocrReady) await initOcrWorker();
+    
+        nameFragments = [];
+        const started = performance.now();
+        let tries = 0;
+    
+        while (performance.now() - started < durationMs) {
+          const piece = await extractNameOnceSinglePassNoCommit();
+          if (piece) addNameFragment(piece);
+    
+          tries++;
+          await sleep(intervalMs);
+        }
+    
+        lastNameOcrDebug.fragments = [...nameFragments];
+    
+        const resolved = resolveNameFromFragments(nameFragments, knownNames);
+    
+        // 애매한 경우 보수 전략
+        const longestFrag = Math.max(0, ...nameFragments.map(x => x.length));
+    
+        if (resolved.name) {
+          if (resolved.ambiguous && longestFrag <= 3 && lastResolvedName) {
+            detectedName = lastResolvedName;
+          } else {
+            detectedName = resolved.name;
+            lastResolvedName = resolved.name;
+          }
+        } else {
+          // 아무것도 못 잡았으면 이전값 유지 or 빈값
+          // detectedName = "";
+        }
+    
+        setResult(detectedName);
+    
+        const top2Text = (resolved.top2 || [])
+          .map(x => `${x.name}(${x.score})`)
+          .join(" / ");
+    
+        setStatus([
+          "이름 OCR(슬라이드 대응) 완료 ✅",
+          `레이아웃 분류: ${lastNameOcrDebug.mode || "-"}`,
+          `프레임 크기: ${lastNameOcrDebug.frameW} x ${lastNameOcrDebug.frameH}`,
+          lastNameOcrDebug.roiPx
+            ? `ROI(px): x=${lastNameOcrDebug.roiPx.x}, y=${lastNameOcrDebug.roiPx.y}, w=${lastNameOcrDebug.roiPx.w}, h=${lastNameOcrDebug.roiPx.h}`
+            : "ROI(px): -",
+          `수집 횟수: ${tries}`,
+          `수집 조각: ${JSON.stringify(nameFragments)}`,
+          `최종 결과: ${detectedName || "(없음)"}`,
+          `점수: ${resolved.confidence ?? 0}`,
+          `애매 여부: ${resolved.ambiguous ? "예" : "아니오"}`,
+          `상위 후보: ${top2Text || "-"}`
+        ].join("\n"));
+    
+        return detectedName;
+      } catch (err) {
+        console.error(err);
+        setStatus("이름 OCR(슬라이드 대응) 실패: " + (err?.message || String(err)));
+        return null;
+      } finally {
+        ocrBusy = false;
+      }
+    }
+    
+    /*********************************************************
+     * 9) 외부에서 호출하는 이름 추출 함수 (기존 extractNameOnce 대체)
+     *********************************************************/
+    async function extractNameOnce() {
+      return extractNameWithMarqueeSampling({
+        durationMs: MARQUEE_SAMPLE_DURATION_MS,
+        intervalMs: MARQUEE_SAMPLE_INTERVAL_MS
+      });
+    }
+    
+    /*********************************************************
+     * 10) OCR 자동 루프 (기존 startOcrLoop/stopOcrLoop 교체)
+     * - setInterval 대신 재귀 setTimeout 방식으로 중첩 방지
+     *********************************************************/
+    function startOcrLoop() {
+      stopOcrLoop();
+    
+      const tick = async () => {
+        if (!captureStream) return;
+        try {
+          await extractNameOnce(); // 내부에서 ocrBusy 관리
+        } finally {
+          if (captureStream) {
+            ocrLoopTimer = setTimeout(tick, OCR_NAME_LOOP_INTERVAL_MS);
+          }
+        }
+      };
+    
+      // 바로 시작
+      tick();
+    }
+    
+    function stopOcrLoop() {
+      if (ocrLoopTimer) {
+        clearTimeout(ocrLoopTimer);
+        ocrLoopTimer = null;
+      }
+    }
+    
+    /*********************************************************
+     * 11) (선택) names.json 이름 사전 보정 함수 대체/보강 버전
+     * - 단일 OCR 결과 보정이 필요할 때 사용
+     *********************************************************/
+    function correctByKnownNames(candidate) {
+      if (!candidate || !knownNames.length) return candidate;
+    
+      const candNorm = normalizeNameForMatch(candidate);
+    
+      let best = candidate;
+      let bestScore = Infinity;
+    
+      for (const name of knownNames) {
+        const n = normalizeNameForMatch(name);
+        const d = levenshtein(candNorm, n);
+        const lenDiff = Math.abs(candNorm.length - n.length);
+        const score = d + lenDiff * 0.3;
+    
+        if (score < bestScore) {
+          bestScore = score;
+          best = name;
+        }
+      }
+    
+      if (bestScore > Math.max(2, candNorm.length * 0.6)) {
+        return candidate;
+      }
+      return best;
+    }
+    
 
     // -----------------------------
     // 5) OCR 결과 후처리 (문자열 정리)
@@ -474,73 +970,6 @@
       return { best, all: results };
     }
 
-    // -----------------------------
-    // 6) 현재 프레임에서 이름 추출
-    // -----------------------------
-    async function extractNameOnce() {
-      if (!captureStream || !videoEl.srcObject) return null;
-      if (!ocrReady) await initOcrWorker();
-      if (ocrBusy) return null;
-      if (!videoEl.videoWidth || !videoEl.videoHeight) return null;
-
-      ocrBusy = true;
-      try {
-        const frameW = videoEl.videoWidth;
-        const frameH = videoEl.videoHeight;
-
-        const { mode, roi: roiNorm } = getActiveNameRoi(frameW, frameH);
-        const roiPx = normToPxRect(roiNorm, frameW, frameH);
-
-        // 원본 ROI 캡처
-        captureRoiFromVideo(videoEl, roiPx, roiCanvas);
-
-        // OCR 전처리
-        const recog = await recognizeNameWithVariants();
-        const rawText = recog?.best?.raw ?? "";
-        let name = recog?.best?.cleaned ?? "";
-        
-        if (name) {
-          name = correctByKnownNames(name);
-        }
-        
-        detectedName = name || "";
-        setResult(detectedName);
-        
-        setStatus([
-          "이름 OCR 완료 ✅",
-          `레이아웃 분류: ${mode}`,
-          `프레임 크기: ${frameW} x ${frameH}`,
-          `ROI(px): x=${roiPx.x}, y=${roiPx.y}, w=${roiPx.w}, h=${roiPx.h}`,
-          `선택 전처리: ${recog?.best?.mode ?? "-"}`,
-          `OCR 원문: ${JSON.stringify(rawText)}`,
-          `정리 결과: ${detectedName || "(없음)"}`
-        ].join("\n"));
-
-        return detectedName;
-      } catch (err) {
-        console.error(err);
-        setStatus("이름 OCR 실패: " + (err?.message || String(err)));
-        return null;
-      } finally {
-        ocrBusy = false;
-      }
-    }
-
-    function startOcrLoop() {
-      stopOcrLoop();
-
-      // 이름은 자주 변하지 않으므로 700~1200ms 권장
-      ocrLoopTimer = setInterval(() => {
-        if (!ocrBusy) extractNameOnce();
-      }, 900);
-    }
-
-    function stopOcrLoop() {
-      if (ocrLoopTimer) {
-        clearInterval(ocrLoopTimer);
-        ocrLoopTimer = null;
-      }
-    }
 
     // -----------------------------
     // 7) 화면공유 시작/중지
