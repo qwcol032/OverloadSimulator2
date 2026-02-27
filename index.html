@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>화면 감지 시작</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 24px;
+      background: #111;
+      color: #eee;
+    }
+    button {
+      padding: 10px 16px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-right: 8px;
+    }
+    #status {
+      margin-top: 12px;
+      white-space: pre-line;
+      color: #b8f;
+    }
+    .wrap {
+      margin-top: 16px;
+      border: 1px solid #333;
+      border-radius: 8px;
+      overflow: hidden;
+      display: inline-block;
+      background: #000;
+    }
+    video {
+      display: block;
+      width: min(960px, 90vw);
+      height: auto;
+      background: #000;
+    }
+    .hint {
+      margin-top: 8px;
+      color: #aaa;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <h1>화면 감지(프로그램 창 선택)</h1>
+
+  <button id="btnStart">화면 감지 시작</button>
+  <button id="btnStop" disabled>중지</button>
+
+  <div id="status">대기 중...</div>
+
+  <div class="wrap">
+    <video id="preview" autoplay playsinline muted></video>
+  </div>
+
+  <div class="hint">
+    ※ 공유 창에서 <b>전체 화면</b>이 아니라 <b>창(Window)</b>을 선택하세요.
+  </div>
+
+  <script>
+    const btnStart = document.getElementById("btnStart");
+    const btnStop = document.getElementById("btnStop");
+    const statusEl = document.getElementById("status");
+    const videoEl = document.getElementById("preview");
+
+    /** @type {MediaStream|null} */
+    let captureStream = null;
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    async function startScreenCapture() {
+      try {
+        // 이미 실행 중이면 먼저 종료
+        stopScreenCapture();
+
+        setStatus("화면 공유 권한 요청 중...\n공유 창에서 '창(Window)'를 선택해주세요.");
+
+        // 브라우저별 지원 차이가 있으므로 일부 옵션은 무시될 수 있음
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            frameRate: { ideal: 15, max: 30 } // 분석용이면 너무 높을 필요 없음
+          },
+          audio: false
+        });
+
+        captureStream = stream;
+        videoEl.srcObject = stream;
+
+        // 메타데이터 로드 후 실제 해상도 확인
+        await new Promise((resolve) => {
+          if (videoEl.readyState >= 1) return resolve();
+          videoEl.onloadedmetadata = () => resolve();
+        });
+
+        const track = stream.getVideoTracks()[0];
+        const settings = track.getSettings ? track.getSettings() : {};
+
+        // 사용자가 공유 종료(브라우저 UI에서 중지)했을 때 처리
+        track.onended = () => {
+          setStatus("공유가 종료되었습니다.");
+          btnStart.disabled = false;
+          btnStop.disabled = true;
+          videoEl.srcObject = null;
+          captureStream = null;
+        };
+
+        btnStart.disabled = true;
+        btnStop.disabled = false;
+
+        setStatus(
+          [
+            "화면 감지 준비 완료 ✅",
+            `실제 영상 크기: ${videoEl.videoWidth} x ${videoEl.videoHeight}`,
+            `트랙 설정(displaySurface): ${settings.displaySurface || "알 수 없음"}`,
+            "다음 단계에서 이 video 프레임을 canvas로 그려 ROI 검사하면 됩니다."
+          ].join("\n")
+        );
+      } catch (err) {
+        console.error(err);
+
+        if (err && err.name === "NotAllowedError") {
+          setStatus("사용자가 화면 공유 권한을 취소했습니다.");
+        } else if (err && err.name === "NotFoundError") {
+          setStatus("공유 가능한 화면/창을 찾을 수 없습니다.");
+        } else {
+          setStatus("화면 공유 시작 실패: " + (err?.message || String(err)));
+        }
+
+        btnStart.disabled = false;
+        btnStop.disabled = true;
+      }
+    }
+
+    function stopScreenCapture() {
+      if (!captureStream) return;
+
+      captureStream.getTracks().forEach((track) => track.stop());
+      captureStream = null;
+      videoEl.srcObject = null;
+
+      btnStart.disabled = false;
+      btnStop.disabled = true;
+      setStatus("중지됨.");
+    }
+
+    btnStart.addEventListener("click", startScreenCapture);
+    btnStop.addEventListener("click", stopScreenCapture);
+  </script>
+</body>
+</html>
