@@ -270,6 +270,29 @@
       dctx.putImageData(img, 0, 0);
     }
 
+    function preprocessNameRoiBinary(srcCanvas, dstCanvas) {
+      preprocessNameRoiSoft(srcCanvas, dstCanvas);
+    
+      const dctx = dstCanvas.getContext("2d", { willReadFrequently: true });
+      const img = dctx.getImageData(0, 0, dstCanvas.width, dstCanvas.height);
+      const data = img.data;
+    
+      // 고정 threshold를 너무 높게 잡지 말기
+      // 흰 글자/검은 배경 -> 검은 글자/흰 배경으로 반전
+      const TH = 160;
+    
+      for (let i = 0; i < data.length; i += 4) {
+        const y = data[i]; // grayscale 상태
+        const v = (y > TH) ? 0 : 255; // invert
+        data[i] = v;
+        data[i + 1] = v;
+        data[i + 2] = v;
+        data[i + 3] = 255;
+      }
+    
+      dctx.putImageData(img, 0, 0);
+    }
+
     // -----------------------------
     // 4) OCR 초기화
     // -----------------------------
