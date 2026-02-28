@@ -2,1056 +2,436 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NIKKE 이름 감지 OCR</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>NIKKE 캐릭터 선택 (Step/Element 필터)</title>
   <style>
-    body {
-      font-family: system-ui, sans-serif;
-      margin: 24px;
-      background: #111;
-      color: #eee;
-    }
-    button {
-      padding: 10px 16px;
-      font-size: 16px;
-      cursor: pointer;
-      margin-right: 8px;
-      margin-bottom: 8px;
-    }
-    .row { margin: 8px 0; }
-    #status {
-      margin-top: 8px;
-      white-space: pre-line;
-      color: #b8f;
-    }
-    #result {
-      margin-top: 8px;
-      font-size: 18px;
-      color: #9ef;
-      white-space: pre-line;
-    }
-    .wrap {
-      margin-top: 16px;
-      border: 1px solid #333;
-      border-radius: 8px;
-      overflow: hidden;
-      display: inline-block;
-      background: #000;
-    }
-    video {
-      display: block;
-      width: min(960px, 90vw);
-      height: auto;
-      background: #000;
-    }
-    .hint {
-      margin-top: 8px;
-      color: #aaa;
+    :root { color-scheme: dark; }
+    body { margin: 20px; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif; background:#0f1115; color:#e7e9ee; }
+    h1 { margin: 0 0 12px; font-size: 20px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin: 10px 0; }
+    .panel { background:#151924; border:1px solid #262b3a; border-radius:12px; padding:12px; }
+    .panel h2 { margin:0 0 10px; font-size:14px; color:#b8c0ff; }
+    .chips { display:flex; gap:8px; flex-wrap:wrap; }
+    .chip {
+      border:1px solid #2b3143; background:#121522; color:#d7dbff;
+      padding:6px 10px; border-radius:999px; cursor:pointer; user-select:none;
       font-size: 13px;
     }
-    .debug {
-      margin-top: 8px;
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
+    .chip.active { background:#2a2f44; border-color:#6a76ff; color:#ffffff; }
+    .chip:hover { filter: brightness(1.08); }
+    input[type="search"]{
+      background:#0f1320; border:1px solid #2b3143; border-radius:10px;
+      color:#e7e9ee; padding:10px 12px; min-width: 240px;
     }
-    .debug canvas {
-      border: 1px solid #333;
-      background: #000;
-      image-rendering: pixelated;
+    .layout { display:grid; grid-template-columns: 1.2fr 0.8fr; gap:12px; align-items:start; }
+    @media (max-width: 980px){ .layout { grid-template-columns: 1fr; } }
+    .meta { color:#a7b0c2; font-size: 12px; }
+    .list {
+      display:grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap:10px;
     }
+    .card {
+      background:#121522; border:1px solid #262b3a; border-radius:12px;
+      padding:10px; cursor:pointer; user-select:none;
+      display:flex; flex-direction:column; gap:6px;
+    }
+    .card:hover { border-color:#4d5b8a; }
+    .card.selected { border-color:#6a76ff; box-shadow: 0 0 0 1px rgba(106,118,255,.25) inset; }
+    .name { font-weight:700; font-size: 14px; }
+    .tags { display:flex; gap:6px; flex-wrap:wrap; }
+    .tag { font-size:12px; padding:2px 8px; border-radius:999px; border:1px solid #2b3143; color:#cfd6ff; }
+    .tag.step { color:#b9ffdf; border-color:#2d4a3e; }
+    .tag.el { color:#ffd6b1; border-color:#4a3a2d; }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; }
+    button {
+      background:#1a2030; border:1px solid #2b3143; color:#e7e9ee;
+      padding:8px 10px; border-radius:10px; cursor:pointer;
+    }
+    button:hover { filter: brightness(1.08); }
+    .selectedList { display:flex; flex-direction:column; gap:8px; }
+    .selectedItem {
+      display:flex; align-items:center; justify-content:space-between;
+      gap:10px; padding:8px 10px;
+      background:#121522; border:1px solid #262b3a; border-radius:10px;
+      font-size: 13px;
+    }
+    .selectedItem .left { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .muted { color:#8d97ad; font-size:12px; }
+    .warn { color:#ffd6b1; }
   </style>
-
-  <!-- Tesseract.js (브라우저 OCR) -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body>
-  <h1>NIKKE 이름 OCR (화면공유 + ROI 프리셋)</h1>
+  <h1>캐릭터 선택 (Step / Element 필터)</h1>
 
-  <div class="row">
-    <button id="btnStart">화면 감지 시작</button>
-    <button id="btnStop" disabled>중지</button>
-    <button id="btnOnce" disabled>이름 1회 추출</button>
-  </div>
+  <div class="row panel">
+    <div style="flex:1; min-width: 280px;">
+      <h2>필터</h2>
 
-  <div id="status">대기 중...</div>
-  <div id="result">감지된 이름: (없음)</div>
+      <div class="row" style="margin: 6px 0;">
+        <div class="meta">Step</div>
+        <div class="chips" id="stepChips"></div>
+      </div>
 
-  <div class="wrap">
-    <video id="preview" autoplay playsinline muted></video>
-  </div>
+      <div class="row" style="margin: 6px 0;">
+        <div class="meta">Element</div>
+        <div class="chips" id="elementChips"></div>
+      </div>
 
-  <div class="hint">
-    ※ 공유 창에서 <b>창(Window)</b> 선택 권장<br />
-    ※ OCR은 전체화면이 아니라 <b>이름 ROI만</b> 검사해서 성능을 아낍니다.
-  </div>
+      <div class="row" style="margin: 6px 0;">
+        <input id="searchBox" type="search" placeholder="이름 검색 (예: 도로시, 앨리스)" />
+        <div class="meta" id="countInfo">로딩 중...</div>
+      </div>
 
-  <!-- 디버그용 캔버스 -->
-  <div class="debug">
-    <div>
-      <div style="font-size:12px;color:#aaa">원본 ROI</div>
-      <canvas id="roiCanvas" width="200" height="80"></canvas>
+      <div class="row" style="margin: 6px 0;">
+        <span class="muted">※ 카드 클릭 = 선택/해제</span>
+      </div>
     </div>
-    <div>
-      <div style="font-size:12px;color:#aaa">OCR 전처리 ROI</div>
-      <canvas id="ocrCanvas" width="300" height="120"></canvas>
+
+    <div style="min-width: 260px;">
+      <h2>데이터 로드</h2>
+      <div class="row">
+        <button id="btnReload">name.json 다시 로드</button>
+        <button id="btnResetFilters">필터 초기화</button>
+      </div>
+      <div class="muted">
+        기본 경로: <code>./data/name.json</code><br/>
+        (GitHub Pages에선 <code>data/name.json</code>로 올려두면 됨)
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <input id="fileInput" type="file" accept="application/json" />
+      </div>
+      <div class="muted">※ fetch가 막히거나 테스트할 때 로컬 파일로도 로드 가능</div>
+      <div id="status" class="muted" style="margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <div class="layout">
+    <div class="panel">
+      <h2>캐릭터 목록</h2>
+      <div class="list" id="characterList"></div>
+    </div>
+
+    <div class="panel">
+      <h2>선택된 캐릭터</h2>
+      <div class="actions" style="margin-bottom:10px;">
+        <button id="btnClearSelected">선택 전체 해제</button>
+        <button id="btnCopySelected">선택 이름 복사</button>
+      </div>
+      <div class="selectedList" id="selectedList"></div>
+      <div class="muted" id="selectedMeta" style="margin-top:10px;"></div>
     </div>
   </div>
 
   <script>
-    const btnStart = document.getElementById("btnStart");
-    const btnStop = document.getElementById("btnStop");
-    const btnOnce = document.getElementById("btnOnce");
+    // ====== 설정 ======
+    const DATA_URL = "./data/name.json";
+
+    const STEP_FILTERS = [
+      { label: "전체", value: "ALL" },
+      { label: "1", value: "1" },
+      { label: "2", value: "2" },
+      { label: "3", value: "3" },
+      { label: "A", value: "A" },
+    ];
+
+    const ELEMENT_FILTERS = [
+      { label: "전체", value: "ALL" },
+      { label: "Iron", value: "Iron" },
+      { label: "Wind", value: "Wind" },
+      { label: "Electronic", value: "Electronic" },
+      { label: "Fire", value: "Fire" },
+      { label: "Water", value: "Water" },
+    ];
+
+    // ====== 상태 ======
+    /** @type {{ id:number|string, name:string, step:string, element:string, order?:number }[]} */
+    let allChars = [];
+    let activeStep = "ALL";
+    let activeElement = "ALL";
+    let searchText = "";
+
+    /** @type {Set<number|string>} */
+    const selectedIds = new Set();
+
+    // ====== DOM ======
+    const stepChips = document.getElementById("stepChips");
+    const elementChips = document.getElementById("elementChips");
+    const searchBox = document.getElementById("searchBox");
+    const countInfo = document.getElementById("countInfo");
+    const listEl = document.getElementById("characterList");
+    const selectedListEl = document.getElementById("selectedList");
+    const selectedMetaEl = document.getElementById("selectedMeta");
     const statusEl = document.getElementById("status");
-    const resultEl = document.getElementById("result");
-    const videoEl = document.getElementById("preview");
-    const roiCanvas = document.getElementById("roiCanvas");
-    const ocrCanvas = document.getElementById("ocrCanvas");
 
-    let captureStream = null;
+    const btnReload = document.getElementById("btnReload");
+    const btnResetFilters = document.getElementById("btnResetFilters");
+    const btnClearSelected = document.getElementById("btnClearSelected");
+    const btnCopySelected = document.getElementById("btnCopySelected");
+    const fileInput = document.getElementById("fileInput");
 
-    // 필요하면 이름 후보 목록(JSON) 로드해서 OCR 결과 보정 가능
-    // 예: /data/names.json => ["앨리스","홍련","라푼젤", ...]
-    let knownNames = [];
-
-    function setStatus(text) {
-      statusEl.textContent = text;
+    function setStatus(msg, isWarn=false){
+      statusEl.textContent = msg;
+      statusEl.className = isWarn ? "muted warn" : "muted";
     }
 
-    function setResult(text) {
-      resultEl.textContent = `감지된 이름: ${text || "(없음)"}`;
+    // ====== 데이터 파싱 ======
+    function mapUseBurstSkillToStep(useBurst) {
+      // JSON에는 Step1/2/3 또는 AllStep 같은 값이 들어옴 :contentReference[oaicite:2]{index=2}
+      if (!useBurst) return "";
+      if (useBurst === "AllStep") return "A"; // 사용자 요구: A
+      const m = String(useBurst).match(/Step(\d)/i);
+      return m ? m[1] : "";
     }
 
-    // -----------------------------
-    // 1) 화면비율별 이름 OCR ROI 프리셋 (정규화 좌표)
-    // 네가 올린 7장 기준으로 측정한 값
-    // -----------------------------
-    const NAME_ROI_PRESETS = {
-      // 가로 4:3 (윈도우)
-      landscape_4_3:   { x: 0.875, y: 0.235, w: 0.081, h: 0.043 },
+    function parseCharacterList(raw) {
+      if (!Array.isArray(raw)) throw new Error("JSON 최상위는 배열이어야 합니다.");
 
-      // 가로 16:9 (윈도우)
-      landscape_16_9:  { x: 0.901, y: 0.235, w: 0.065, h: 0.043 },
+      const out = [];
+      for (const it of raw) {
+        if (!it) continue;
+        if (it.is_visible === false) continue;
 
-      // 가로 21:9 (윈도우)
-      landscape_21_9:  { x: 0.919, y: 0.240, w: 0.055, h: 0.045 },
+        const name = it?.name_localkey?.name ?? ""; // name_localkey.name :contentReference[oaicite:3]{index=3}
+        const element = it?.element_id?.element?.element ?? ""; // element_id.element.element :contentReference[oaicite:4]{index=4}
+        const step = mapUseBurstSkillToStep(it?.use_burst_skill);
+        const id = it?.id ?? name;
+        const order = typeof it?.order === "number" ? it.order : undefined;
 
-      // 세로 4:3 (윈도우)
-      portrait_4_3:    { x: 0.792, y: 0.240, w: 0.135, h: 0.045 },
+        if (!name || !element || !step) continue;
 
-      // 세로 16:9 (윈도우)
-      portrait_16_9:   { x: 0.729, y: 0.240, w: 0.176, h: 0.045 },
+        // element은 5종만 쓰기로 했으니, 혹시 다른 값이면 스킵
+        if (!["Iron","Wind","Electronic","Fire","Water"].includes(element)) continue;
+        if (!["1","2","3","A"].includes(step)) continue;
 
-      // 세로 21:9 (윈도우, 매우 좁음)
-      portrait_21_9:   { x: 0.734, y: 0.304, w: 0.164, h: 0.034 },
+        out.push({ id, name, element, step, order });
+      }
 
-      // 전체화면 16:9
-      fullscreen_16_9: { x: 0.902, y: 0.208, w: 0.065, h: 0.047 },
-    };
+      // 보기 좋게 order 우선, 없으면 이름순
+      out.sort((a,b) => (a.order ?? 1e9) - (b.order ?? 1e9) || a.name.localeCompare(b.name, "ko"));
 
-    // ROI 여유 패딩 (현재 프리셋에 추가로 조금 넓힘)
-    const ROI_PAD_SCALE = {
-      x: 0.12,  // 좌우 12%
-      y: 0.20   // 상하 20%
-    };
-
-    function classifyLayout(videoWidth, videoHeight) {
-      const a = videoWidth / videoHeight;
-
-      // 네 샘플 기준으로 분류 범위 설정
-      if (a >= 2.05) return "landscape_21_9";
-      if (a >= 1.75) return "fullscreen_16_9"; // 전체화면 16:9
-      if (a >= 1.55) return "landscape_16_9";
-      if (a >= 1.10) return "landscape_4_3";
-
-      // 세로 모드
-      if (a >= 0.63) return "portrait_4_3";
-      if (a >= 0.48) return "portrait_16_9";
-      return "portrait_21_9";
+      return out;
     }
 
-    function inflateNormRect(rect, scaleX = 0.1, scaleY = 0.1) {
-      const padX = rect.w * scaleX;
-      const padY = rect.h * scaleY;
-      return clampNormRect({
-        x: rect.x - padX,
-        y: rect.y - padY,
-        w: rect.w + padX * 2,
-        h: rect.h + padY * 2
+    async function loadDataFromUrl() {
+      setStatus("name.json 로딩 중...");
+      const res = await fetch(DATA_URL, { cache: "no-store" });
+      if (!res.ok) throw new Error(`fetch 실패: ${res.status} ${res.statusText}`);
+      const raw = await res.json();
+      allChars = parseCharacterList(raw);
+      setStatus(`로드 완료: ${allChars.length}명`);
+      renderAll();
+    }
+
+    async function loadDataFromFile(file) {
+      const text = await file.text();
+      const raw = JSON.parse(text);
+      allChars = parseCharacterList(raw);
+      setStatus(`로컬 파일 로드 완료: ${allChars.length}명`);
+      renderAll();
+    }
+
+    // ====== 필터 UI ======
+    function renderChips(container, items, activeValue, onClick) {
+      container.innerHTML = "";
+      for (const it of items) {
+        const el = document.createElement("div");
+        el.className = "chip" + (it.value === activeValue ? " active" : "");
+        el.textContent = it.label;
+        el.dataset.value = it.value;
+        el.addEventListener("click", () => onClick(it.value));
+        container.appendChild(el);
+      }
+    }
+
+    function applyFilters(list) {
+      const st = searchText.trim();
+      return list.filter(x => {
+        if (activeStep !== "ALL" && x.step !== activeStep) return false;
+        if (activeElement !== "ALL" && x.element !== activeElement) return false;
+        if (st && !x.name.includes(st)) return false;
+        return true;
       });
     }
 
-    function clampNormRect(r) {
-      let x = Math.max(0, r.x);
-      let y = Math.max(0, r.y);
-      let w = Math.max(0.001, r.w);
-      let h = Math.max(0.001, r.h);
-      if (x + w > 1) w = 1 - x;
-      if (y + h > 1) h = 1 - y;
-      return { x, y, w, h };
-    }
+    // ====== 렌더링 ======
+    function renderList() {
+      const filtered = applyFilters(allChars);
+      countInfo.textContent = `표시: ${filtered.length} / 전체: ${allChars.length}`;
 
-    function normToPxRect(normRect, frameW, frameH) {
-      const x = Math.round(normRect.x * frameW);
-      const y = Math.round(normRect.y * frameH);
-      const w = Math.round(normRect.w * frameW);
-      const h = Math.round(normRect.h * frameH);
-      return { x, y, w, h };
-    }
+      listEl.innerHTML = "";
+      for (const c of filtered) {
+        const card = document.createElement("div");
+        card.className = "card" + (selectedIds.has(c.id) ? " selected" : "");
+        card.title = "클릭하여 선택/해제";
 
-    function getActiveNameRoi(videoWidth, videoHeight) {
-      const mode = classifyLayout(videoWidth, videoHeight);
-      const base = NAME_ROI_PRESETS[mode] || NAME_ROI_PRESETS.landscape_16_9;
-      const roi = inflateNormRect(base, ROI_PAD_SCALE.x, ROI_PAD_SCALE.y);
-      return { mode, roi };
-    }
+        const name = document.createElement("div");
+        name.className = "name";
+        name.textContent = c.name;
 
-    // -----------------------------
-    // 2) 캔버스 유틸: video -> ROI 캡처
-    // -----------------------------
-    function captureRoiFromVideo(video, roiPx, outCanvas) {
-      const ctx = outCanvas.getContext("2d", { willReadFrequently: true });
-      outCanvas.width = roiPx.w;
-      outCanvas.height = roiPx.h;
-      ctx.drawImage(
-        video,
-        roiPx.x, roiPx.y, roiPx.w, roiPx.h,
-        0, 0, roiPx.w, roiPx.h
-      );
-    }
-    
-    /*********************************************************
-     * OCR + 슬라이드(마키) 이름 대응 통합본
-     * - 한글 친화 전처리(soft/binary)
-     * - OCR 후보 2개 비교
-     * - 여러 프레임 조각 수집 후 names.json 매칭
-     *********************************************************/
-    
-    // ===== 상태 변수 =====
-    let ocrWorker = null;
-    let ocrReady = false;
-    let ocrBusy = false;
-    
-    let ocrLoopTimer = null;
-    let nameFragments = [];
-    let lastResolvedName = "";
-    
-    // 디버그용 마지막 정보
-    let lastNameOcrDebug = {
-      mode: "",
-      frameW: 0,
-      frameH: 0,
-      roiPx: null,
-      fragments: [],
-      rawCandidates: []
-    };
-    
-    // ===== 조정 파라미터 =====
-    const OCR_NAME_LOOP_INTERVAL_MS = 1200;     // 자동 루프 간격(마키 샘플링 포함이라 넉넉히)
-    const MARQUEE_SAMPLE_DURATION_MS = 1800;    // 슬라이드 이름 조각 수집 시간
-    const MARQUEE_SAMPLE_INTERVAL_MS = 180;     // 조각 수집 간격
-    const NAME_ROI_EXTRA_LEFT_FOR_MARQUEE = 0.12; // 긴 이름이 좌측으로 흘러갈 때 대비: ROI를 왼쪽으로 약간 확장(ROI 폭 비율)
-    
-    // ROI 내에서 텍스트 부분만 다시 자르고 싶다면 활성화 (선택)
-    // 현재 false로 두고, 필요시 true로 바꿔서 미세조정
-    const USE_NAME_SUBROI = false;
-    // ROI 내부 기준 비율 (예시) - 필요시 직접 튜닝
-    const NAME_SUBROI = { x: 0.00, y: 0.05, w: 1.00, h: 0.90 }; // 이름판 전체를 거의 그대로 사용
-    
-    function sleep(ms) {
-      return new Promise(r => setTimeout(r, ms));
-    }
-    
-    /*********************************************************
-     * 1) 문자열 정규화 / 후처리
-     *********************************************************/
-    function normalizeNameForMatch(s) {
-      if (!s) return "";
-      return String(s)
-        .normalize("NFC")
-        .replace(/\s+/g, "")             // 공백 제거
-        .replace(/[：]/g, ":")           // 전각 콜론 -> 일반 콜론
-        .replace(/\s*:\s*/g, ":")        // 콜론 주변 공백 제거
-        .replace(/[‘’´`]/g, "'")
-        .replace(/[“”"]/g, '"')
-        .replace(/[^0-9A-Za-z가-힣:()]/g, "");
-    }
-    
-    function cleanOcrName(raw) {
-      if (!raw) return "";
-    
-      let s = String(raw)
-        .normalize("NFC")
-        .replace(/\r?\n/g, "")
-        .replace(/\s+/g, "")
-        .replace(/[|]/g, "I")
-        .replace(/[：]/g, ":")
-        .replace(/[“”"']/g, "")
-        .trim();
-    
-      // 비교 가능한 문자만 남김
-      s = s.replace(/[^0-9A-Za-z가-힣:()]/g, "");
-    
-      if (!s) return "";
-      return s;
-    }
-    
-    function hangulRatio(s) {
-      if (!s) return 0;
-      const t = String(s).replace(/\s+/g, "");
-      if (!t) return 0;
-      const m = t.match(/[가-힣]/g) || [];
-      return m.length / t.length;
-    }
-    
-    /*********************************************************
-     * 2) 전처리 (한글 친화)
-     * - soft(gray) : 주력
-     * - binary     : 보조 후보
-     *********************************************************/
-    function preprocessNameRoiSoft(srcCanvas, dstCanvas) {
-      const scale = 4; // 한글 획 보존 위해 4배 권장
-      dstCanvas.width = Math.max(1, srcCanvas.width * scale);
-      dstCanvas.height = Math.max(1, srcCanvas.height * scale);
-    
-      const dctx = dstCanvas.getContext("2d", { willReadFrequently: true });
-      dctx.clearRect(0, 0, dstCanvas.width, dstCanvas.height);
-    
-      // ✅ 한글 깨짐 방지: smoothing ON
-      dctx.imageSmoothingEnabled = true;
-      dctx.imageSmoothingQuality = "high";
-      dctx.drawImage(srcCanvas, 0, 0, dstCanvas.width, dstCanvas.height);
-    
-      const img = dctx.getImageData(0, 0, dstCanvas.width, dstCanvas.height);
-      const data = img.data;
-    
-      for (let i = 0; i < data.length; i += 4) {
-        const r = data[i];
-        const g = data[i + 1];
-        const b = data[i + 2];
-    
-        let y = 0.299 * r + 0.587 * g + 0.114 * b;
-    
-        // 약한 대비 강화 (과하면 한글 획이 뭉개짐)
-        y = (y - 128) * 1.15 + 128;
-        if (y < 0) y = 0;
-        if (y > 255) y = 255;
-    
-        data[i] = y;
-        data[i + 1] = y;
-        data[i + 2] = y;
-        data[i + 3] = 255;
-      }
-    
-      dctx.putImageData(img, 0, 0);
-    }
-    
-    function preprocessNameRoiBinary(srcCanvas, dstCanvas) {
-      preprocessNameRoiSoft(srcCanvas, dstCanvas);
-    
-      const dctx = dstCanvas.getContext("2d", { willReadFrequently: true });
-      const img = dctx.getImageData(0, 0, dstCanvas.width, dstCanvas.height);
-      const data = img.data;
-    
-      // 고정 threshold는 너무 세지 않게
-      const TH = 160;
-    
-      for (let i = 0; i < data.length; i += 4) {
-        const y = data[i]; // grayscale
-        // 흰 글자 / 어두운 배경 -> 반전해서 검정글자/흰배경 형태
-        const v = (y > TH) ? 0 : 255;
-        data[i] = v;
-        data[i + 1] = v;
-        data[i + 2] = v;
-        data[i + 3] = 255;
-      }
-    
-      dctx.putImageData(img, 0, 0);
-    }
-    
-    /*********************************************************
-     * 3) OCR 초기화 (kor 우선)
-     *********************************************************/
-    async function initOcrWorker() {
-      if (ocrReady) return;
-    
-      setStatus("OCR 엔진 초기화 중... (처음 1회는 조금 걸릴 수 있음)");
-    
-      // Tesseract.js v5 CDN 기준
-      ocrWorker = await Tesseract.createWorker("kor", 1, {
-        logger: (m) => {
-          // console.log("OCR:", m);
-        }
-      });
-    
-      await ocrWorker.setParameters({
-        tessedit_pageseg_mode: "7",   // single line
-        preserve_interword_spaces: "0",
-        user_defined_dpi: "300"
-      });
-    
-      ocrReady = true;
-      setStatus("OCR 엔진 준비 완료 ✅");
-    }
-    
-    /*********************************************************
-     * 4) OCR 후보 점수 계산 (soft vs binary 선택)
-     *********************************************************/
-    function scoreNameCandidateText(text, conf = 0) {
-      const cleaned = cleanOcrName(text);
-      if (!cleaned) return -999;
-    
-      const hRatio = hangulRatio(cleaned);
-      let score = conf * 0.6 + hRatio * 100;
-    
-      // 이름 길이 휴리스틱 (2~10자 정도 보정)
-      if (cleaned.length >= 1 && cleaned.length <= 12) score += 8;
-      else score -= Math.abs(cleaned.length - 6) * 2;
-    
-      // 한글이 하나도 없으면 (영문으로 도망간 경우) 약간 감점
-      if ((cleaned.match(/[가-힣]/g) || []).length === 0) {
-        score -= 20;
-      }
-    
-      return score;
-    }
-    
-    async function recognizeNameWithVariants() {
-      // roiCanvas에 원본 ROI가 이미 들어있다고 가정
-      const tempSoft = document.createElement("canvas");
-      const tempBin = document.createElement("canvas");
-    
-      preprocessNameRoiSoft(roiCanvas, tempSoft);
-      preprocessNameRoiBinary(roiCanvas, tempBin);
-    
-      // 디버그 표시용: soft 버전 보여주기
-      ocrCanvas.width = tempSoft.width;
-      ocrCanvas.height = tempSoft.height;
-      ocrCanvas.getContext("2d").drawImage(tempSoft, 0, 0);
-    
-      const results = [];
-    
-      {
-        const ret = await ocrWorker.recognize(tempSoft);
-        results.push({
-          mode: "soft",
-          raw: ret?.data?.text ?? "",
-          conf: ret?.data?.confidence ?? 0
+        const tags = document.createElement("div");
+        tags.className = "tags";
+
+        const tStep = document.createElement("span");
+        tStep.className = "tag step";
+        tStep.textContent = `Step ${c.step}`;
+
+        const tEl = document.createElement("span");
+        tEl.className = "tag el";
+        tEl.textContent = c.element;
+
+        tags.appendChild(tStep);
+        tags.appendChild(tEl);
+
+        card.appendChild(name);
+        card.appendChild(tags);
+
+        card.addEventListener("click", () => {
+          toggleSelect(c.id);
         });
+
+        listEl.appendChild(card);
       }
-    
-      {
-        const ret = await ocrWorker.recognize(tempBin);
-        results.push({
-          mode: "binary",
-          raw: ret?.data?.text ?? "",
-          conf: ret?.data?.confidence ?? 0
+    }
+
+    function renderSelected() {
+      const selected = allChars.filter(c => selectedIds.has(c.id));
+
+      selectedListEl.innerHTML = "";
+      for (const c of selected) {
+        const row = document.createElement("div");
+        row.className = "selectedItem";
+
+        const left = document.createElement("div");
+        left.className = "left";
+
+        const nm = document.createElement("span");
+        nm.textContent = c.name;
+
+        const st = document.createElement("span");
+        st.className = "tag step";
+        st.textContent = `Step ${c.step}`;
+
+        const el = document.createElement("span");
+        el.className = "tag el";
+        el.textContent = c.element;
+
+        left.appendChild(nm);
+        left.appendChild(st);
+        left.appendChild(el);
+
+        const btn = document.createElement("button");
+        btn.textContent = "삭제";
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          selectedIds.delete(c.id);
+          renderAll();
         });
+
+        row.appendChild(left);
+        row.appendChild(btn);
+        selectedListEl.appendChild(row);
       }
-    
-      let best = null;
-      const normalized = [];
-    
-      for (const r of results) {
-        const cleaned = cleanOcrName(r.raw);
-        const score = scoreNameCandidateText(cleaned, r.conf);
-        const item = { ...r, cleaned, score };
-        normalized.push(item);
-        if (!best || item.score > best.score) best = item;
-      }
-    
-      lastNameOcrDebug.rawCandidates = normalized;
-      return { best, all: normalized };
+
+      const lines = selected.map(x => x.name).join("\n");
+      selectedMetaEl.textContent = selected.length
+        ? `선택 ${selected.length}명\n(복사 버튼을 누르면 이름이 줄바꿈으로 복사됩니다.)`
+        : "선택된 캐릭터가 없습니다.";
+      selectedMetaEl.dataset.clip = lines;
     }
-    
-    /*********************************************************
-     * 5) ROI 보정 (마키 대응용 좌측 확장 + 선택적 서브 ROI)
-     *********************************************************/
-    function clampPxRect(rect, frameW, frameH) {
-      let x = Math.max(0, rect.x);
-      let y = Math.max(0, rect.y);
-      let w = Math.max(1, rect.w);
-      let h = Math.max(1, rect.h);
-    
-      if (x + w > frameW) w = frameW - x;
-      if (y + h > frameH) h = frameH - y;
-    
-      return {
-        x: Math.max(0, x),
-        y: Math.max(0, y),
-        w: Math.max(1, w),
-        h: Math.max(1, h)
-      };
-    }
-    
-    function expandNameRoiForMarquee(roiPx, frameW, frameH) {
-      const addLeft = Math.round(roiPx.w * NAME_ROI_EXTRA_LEFT_FOR_MARQUEE);
-      return clampPxRect({
-        x: roiPx.x - addLeft,
-        y: roiPx.y,
-        w: roiPx.w + addLeft,
-        h: roiPx.h
-      }, frameW, frameH);
-    }
-    
-    function applySubRoiOnCanvas(srcCanvas, subRectNorm, dstCanvas) {
-      const sx = Math.round(srcCanvas.width * subRectNorm.x);
-      const sy = Math.round(srcCanvas.height * subRectNorm.y);
-      const sw = Math.round(srcCanvas.width * subRectNorm.w);
-      const sh = Math.round(srcCanvas.height * subRectNorm.h);
-    
-      dstCanvas.width = Math.max(1, sw);
-      dstCanvas.height = Math.max(1, sh);
-    
-      const dctx = dstCanvas.getContext("2d", { willReadFrequently: true });
-      dctx.clearRect(0, 0, dstCanvas.width, dstCanvas.height);
-      dctx.drawImage(srcCanvas, sx, sy, sw, sh, 0, 0, dstCanvas.width, dstCanvas.height);
-    }
-    
-    /*********************************************************
-     * 6) 조각(fragment) 누적 및 names.json 기반 최종 해석
-     *********************************************************/
-    function addNameFragment(fragment) {
-      const raw = (fragment || "").trim();
-      if (!raw) return;
-    
-      const norm = normalizeNameForMatch(raw);
-      if (!norm) return;
-    
-      // 너무 짧은 조각은 노이즈 제거 (단, 1글자 이름 예외)
-      const allowShortSingles = new Set(["D", "K"]);
-      if (norm.length < 2 && !allowShortSingles.has(norm)) return;
-    
-      // 중복 방지
-      if (!nameFragments.includes(norm)) {
-        nameFragments.push(norm);
-      }
-    
-      // 최대 20개만 유지
-      if (nameFragments.length > 20) {
-        nameFragments = nameFragments.slice(-20);
-      }
-    }
-    
-    function fuzzyContains(text, frag, maxDist = 1) {
-      if (!text || !frag) return false;
-      if (text.includes(frag)) return true;
-    
-      const targetLen = frag.length;
-      if (targetLen <= 0 || text.length < targetLen) return false;
-    
-      for (let i = 0; i <= text.length - targetLen; i++) {
-        const part = text.slice(i, i + targetLen);
-        if (levenshtein(part, frag) <= maxDist) return true;
-      }
-      return false;
-    }
-    
-    function scoreCandidateByFragments(candidate, fragments) {
-      const candNorm = normalizeNameForMatch(candidate);
-      if (!candNorm) return -9999;
-    
-      let score = 0;
-      let matchedCount = 0;
-    
-      for (const frag of fragments) {
-        if (!frag) continue;
-    
-        if (candNorm.includes(frag)) {
-          score += 20 + frag.length * frag.length; // 긴 조각 가중치 크게
-          matchedCount++;
-          continue;
-        }
-    
-        // OCR 오타 대응 (길이가 충분히 길 때만 가볍게 fuzzy)
-        const maxDist = frag.length >= 5 ? 1 : 0;
-        if (maxDist > 0 && fuzzyContains(candNorm, frag, maxDist)) {
-          score += 8 + frag.length * 1.5;
-          matchedCount++;
-          continue;
-        }
-      }
-    
-      // 콜론 포함 이름은 "조각 여러 개"가 모일수록 유리하게
-      if (candNorm.includes(":")) {
-        score += matchedCount * 8;
-      }
-    
-      // 조각이 매우 짧고 적을 때 콜론 이름 과대평가 방지
-      if (fragments.length <= 2 && fragments.every(f => f.length <= 3)) {
-        if (candNorm.includes(":")) score -= 6;
-      }
-    
-      // 완전 일치 조각이 있으면 큰 보너스
-      if (fragments.includes(candNorm)) {
-        score += 100;
-      }
-    
-      return score;
-    }
-    
-    function resolveNameFromFragments(fragments, knownNames) {
-      if (!knownNames || !knownNames.length) {
-        const bestFrag = [...fragments].sort((a, b) => b.length - a.length)[0] || "";
-        return { name: bestFrag, confidence: 0, ambiguous: true, top2: [] };
-      }
-    
-      const scored = knownNames.map(name => ({
-        name,
-        score: scoreCandidateByFragments(name, fragments)
-      }))
-      .sort((a, b) => b.score - a.score);
-    
-      const best = scored[0];
-      const second = scored[1];
-    
-      if (!best) {
-        return { name: "", confidence: 0, ambiguous: true, top2: [] };
-      }
-    
-      const gap = second ? (best.score - second.score) : best.score;
-      const ambiguous = gap < 10;
-    
-      return {
-        name: best.name,
-        confidence: best.score,
-        ambiguous,
-        top2: scored.slice(0, 2)
-      };
-    }
-    
-    /*********************************************************
-     * 7) 단일 패스 OCR (조각만 반환, 확정 X)
-     *********************************************************/
-    async function extractNameOnceSinglePassNoCommit() {
-      if (!captureStream || !videoEl.srcObject) return "";
-      if (!ocrReady) await initOcrWorker();
-      if (!videoEl.videoWidth || !videoEl.videoHeight) return "";
-    
-      const frameW = videoEl.videoWidth;
-      const frameH = videoEl.videoHeight;
-    
-      const { mode, roi: roiNorm } = getActiveNameRoi(frameW, frameH);
-      let roiPx = normToPxRect(roiNorm, frameW, frameH);
-    
-      // 긴 이름 슬라이드 대응: 왼쪽 약간 확장
-      roiPx = expandNameRoiForMarquee(roiPx, frameW, frameH);
-    
-      // 원본 ROI 캡처
-      captureRoiFromVideo(videoEl, roiPx, roiCanvas);
-    
-      // 선택적으로 텍스트 서브 ROI만 추출해서 OCR
-      if (USE_NAME_SUBROI) {
-        const temp = document.createElement("canvas");
-        temp.width = roiCanvas.width;
-        temp.height = roiCanvas.height;
-        temp.getContext("2d").drawImage(roiCanvas, 0, 0);
-        applySubRoiOnCanvas(temp, NAME_SUBROI, roiCanvas);
-      }
-    
-      const recog = await recognizeNameWithVariants();
-      const piece = recog?.best?.cleaned ?? "";
-    
-      // 디버그 저장
-      lastNameOcrDebug.mode = mode;
-      lastNameOcrDebug.frameW = frameW;
-      lastNameOcrDebug.frameH = frameH;
-      lastNameOcrDebug.roiPx = { ...roiPx };
-    
-      return piece;
-    }
-    
-    /*********************************************************
-     * 8) 슬라이드(마키) 대응 최종 추출
-     * - 여러 프레임 조각 수집 -> names.json 후보 확정
-     *********************************************************/
-    async function extractNameWithMarqueeSampling({
-      durationMs = MARQUEE_SAMPLE_DURATION_MS,
-      intervalMs = MARQUEE_SAMPLE_INTERVAL_MS
-    } = {}) {
-      if (ocrBusy) return null;
-      if (!captureStream || !videoEl.videoWidth || !videoEl.videoHeight) return null;
-    
-      ocrBusy = true;
-      try {
-        if (!ocrReady) await initOcrWorker();
-    
-        nameFragments = [];
-        const started = performance.now();
-        let tries = 0;
-    
-        while (performance.now() - started < durationMs) {
-          const piece = await extractNameOnceSinglePassNoCommit();
-          if (piece) addNameFragment(piece);
-    
-          tries++;
-          await sleep(intervalMs);
-        }
-    
-        lastNameOcrDebug.fragments = [...nameFragments];
-    
-        const resolved = resolveNameFromFragments(nameFragments, knownNames);
-    
-        // 애매한 경우 보수 전략
-        const longestFrag = Math.max(0, ...nameFragments.map(x => x.length));
-    
-        if (resolved.name) {
-          if (resolved.ambiguous && longestFrag <= 3 && lastResolvedName) {
-            detectedName = lastResolvedName;
-          } else {
-            detectedName = resolved.name;
-            lastResolvedName = resolved.name;
-          }
-        } else {
-          // 아무것도 못 잡았으면 이전값 유지 or 빈값
-          // detectedName = "";
-        }
-    
-        setResult(detectedName);
-    
-        const top2Text = (resolved.top2 || [])
-          .map(x => `${x.name}(${x.score})`)
-          .join(" / ");
-    
-        setStatus([
-          "이름 OCR(슬라이드 대응) 완료 ✅",
-          `레이아웃 분류: ${lastNameOcrDebug.mode || "-"}`,
-          `프레임 크기: ${lastNameOcrDebug.frameW} x ${lastNameOcrDebug.frameH}`,
-          lastNameOcrDebug.roiPx
-            ? `ROI(px): x=${lastNameOcrDebug.roiPx.x}, y=${lastNameOcrDebug.roiPx.y}, w=${lastNameOcrDebug.roiPx.w}, h=${lastNameOcrDebug.roiPx.h}`
-            : "ROI(px): -",
-          `수집 횟수: ${tries}`,
-          `수집 조각: ${JSON.stringify(nameFragments)}`,
-          `최종 결과: ${detectedName || "(없음)"}`,
-          `점수: ${resolved.confidence ?? 0}`,
-          `애매 여부: ${resolved.ambiguous ? "예" : "아니오"}`,
-          `상위 후보: ${top2Text || "-"}`
-        ].join("\n"));
-    
-        return detectedName;
-      } catch (err) {
-        console.error(err);
-        setStatus("이름 OCR(슬라이드 대응) 실패: " + (err?.message || String(err)));
-        return null;
-      } finally {
-        ocrBusy = false;
-      }
-    }
-    
-    /*********************************************************
-     * 9) 외부에서 호출하는 이름 추출 함수 (기존 extractNameOnce 대체)
-     *********************************************************/
-    async function extractNameOnce() {
-      return extractNameWithMarqueeSampling({
-        durationMs: MARQUEE_SAMPLE_DURATION_MS,
-        intervalMs: MARQUEE_SAMPLE_INTERVAL_MS
+
+    function renderFilters() {
+      renderChips(stepChips, STEP_FILTERS, activeStep, (v) => {
+        activeStep = v;
+        renderAll();
+      });
+
+      renderChips(elementChips, ELEMENT_FILTERS, activeElement, (v) => {
+        activeElement = v;
+        renderAll();
       });
     }
-    
-    /*********************************************************
-     * 10) OCR 자동 루프 (기존 startOcrLoop/stopOcrLoop 교체)
-     * - setInterval 대신 재귀 setTimeout 방식으로 중첩 방지
-     *********************************************************/
-    function startOcrLoop() {
-      stopOcrLoop();
-    
-      const tick = async () => {
-        if (!captureStream) return;
-        try {
-          await extractNameOnce(); // 내부에서 ocrBusy 관리
-        } finally {
-          if (captureStream) {
-            ocrLoopTimer = setTimeout(tick, OCR_NAME_LOOP_INTERVAL_MS);
-          }
-        }
-      };
-    
-      // 바로 시작
-      tick();
-    }
-    
-    function stopOcrLoop() {
-      if (ocrLoopTimer) {
-        clearTimeout(ocrLoopTimer);
-        ocrLoopTimer = null;
-      }
-    }
-    
-    /*********************************************************
-     * 11) (선택) names.json 이름 사전 보정 함수 대체/보강 버전
-     * - 단일 OCR 결과 보정이 필요할 때 사용
-     *********************************************************/
-    function correctByKnownNames(candidate) {
-      if (!candidate || !knownNames.length) return candidate;
-    
-      const candNorm = normalizeNameForMatch(candidate);
-    
-      let best = candidate;
-      let bestScore = Infinity;
-    
-      for (const name of knownNames) {
-        const n = normalizeNameForMatch(name);
-        const d = levenshtein(candNorm, n);
-        const lenDiff = Math.abs(candNorm.length - n.length);
-        const score = d + lenDiff * 0.3;
-    
-        if (score < bestScore) {
-          bestScore = score;
-          best = name;
-        }
-      }
-    
-      if (bestScore > Math.max(2, candNorm.length * 0.6)) {
-        return candidate;
-      }
-      return best;
-    }
-    
 
-    // -----------------------------
-    // 5) OCR 결과 후처리 (문자열 정리)
-    // -----------------------------
-    function cleanOcrName(raw) {
-      if (!raw) return "";
-
-      let s = String(raw)
-        .replace(/\s+/g, "")
-        .replace(/[|]/g, "I")
-        .replace(/[“”"']/g, "")
-        .trim();
-
-      // 한글/영문/숫자만 남김 (NIKKE 이름 중 일부는 영숫자 포함 가능)
-      s = s.replace(/[^0-9A-Za-z가-힣]/g, "");
-
-      if (!s) return "";
-
-      // 혹시 OCR이 여러 덩어리를 붙여 읽었을 때 대비:
-      // 가장 "이름스러워 보이는" 긴 토큰 선택
-      const parts = s.match(/[0-9A-Za-z가-힣]+/g) || [];
-      if (!parts.length) return s;
-
-      // 우선 가장 긴 토큰
-      parts.sort((a, b) => b.length - a.length);
-      return parts[0];
+    function renderAll() {
+      renderFilters();
+      renderList();
+      renderSelected();
     }
 
-    // 선택사항: 이름 사전 보정 (OCR 오타 교정)
-    function levenshtein(a, b) {
-      const m = a.length, n = b.length;
-      const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-      for (let i = 0; i <= m; i++) dp[i][0] = i;
-      for (let j = 0; j <= n; j++) dp[0][j] = j;
-
-      for (let i = 1; i <= m; i++) {
-        for (let j = 1; j <= n; j++) {
-          const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-          dp[i][j] = Math.min(
-            dp[i - 1][j] + 1,
-            dp[i][j - 1] + 1,
-            dp[i - 1][j - 1] + cost
-          );
-        }
-      }
-      return dp[m][n];
+    // ====== 선택 ======
+    function toggleSelect(id) {
+      if (selectedIds.has(id)) selectedIds.delete(id);
+      else selectedIds.add(id);
+      renderAll();
     }
 
-    function correctByKnownNames(candidate) {
-      if (!candidate || !knownNames.length) return candidate;
+    // ====== 이벤트 ======
+    searchBox.addEventListener("input", () => {
+      searchText = searchBox.value || "";
+      renderList(); // 리스트만 다시
+    });
 
-      let best = candidate;
-      let bestScore = Infinity;
+    btnReload.addEventListener("click", async () => {
+      try { await loadDataFromUrl(); }
+      catch (e) { setStatus(String(e?.message || e), true); }
+    });
 
-      for (const name of knownNames) {
-        const d = levenshtein(candidate, name);
-        // 길이 차이가 너무 큰 건 빠르게 제외
-        const lenDiff = Math.abs(candidate.length - name.length);
-        const score = d + lenDiff * 0.3;
-        if (score < bestScore) {
-          bestScore = score;
-          best = name;
-        }
+    btnResetFilters.addEventListener("click", () => {
+      activeStep = "ALL";
+      activeElement = "ALL";
+      searchText = "";
+      searchBox.value = "";
+      renderAll();
+    });
+
+    btnClearSelected.addEventListener("click", () => {
+      selectedIds.clear();
+      renderAll();
+    });
+
+    btnCopySelected.addEventListener("click", async () => {
+      const text = selectedMetaEl.dataset.clip || "";
+      if (!text) {
+        setStatus("복사할 선택 항목이 없습니다.", true);
+        return;
       }
-
-      // 너무 차이가 크면 원본 유지
-      // (이 값은 이름 리스트 품질에 따라 조절)
-      if (bestScore > Math.max(2, candidate.length * 0.6)) {
-        return candidate;
-      }
-      return best;
-    }
-
-    async function loadKnownNames() {
       try {
-        const res = await fetch("./data/names.json", { cache: "no-store" });
-        if (!res.ok) return;
-        const arr = await res.json();
-        if (Array.isArray(arr)) {
-          knownNames = arr.filter(Boolean).map(String);
-          console.log("knownNames loaded:", knownNames.length);
-        }
+        await navigator.clipboard.writeText(text);
+        setStatus("선택 이름을 클립보드에 복사했습니다.");
+      } catch {
+        // clipboard 실패 시 fallback
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+        setStatus("선택 이름을 복사했습니다. (fallback)");
+      }
+    });
+
+    fileInput.addEventListener("change", async (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      try { await loadDataFromFile(f); }
+      catch (err) { setStatus("로컬 파일 파싱 실패: " + (err?.message || String(err)), true); }
+    });
+
+    // ====== 시작 ======
+    (async function init(){
+      try {
+        await loadDataFromUrl();
       } catch (e) {
-        // 파일 없으면 그냥 무시
-        console.log("names.json not loaded (optional)", e);
+        setStatus(
+          "name.json fetch 실패. GitHub Pages에 data/name.json이 있는지 확인하거나, 아래 파일 업로드로 로드하세요.\n" +
+          String(e?.message || e),
+          true
+        );
+        // 필터/화면은 빈 상태로라도 렌더
+        allChars = [];
+        renderAll();
       }
-    }
-
-    function hangulRatio(s) {
-      if (!s) return 0;
-      const clean = String(s).replace(/\s+/g, "");
-      if (!clean) return 0;
-      const m = clean.match(/[가-힣]/g) || [];
-      return m.length / clean.length;
-    }
-    
-    function scoreNameCandidate(text, conf = 0) {
-      const cleaned = cleanOcrName(text);
-      if (!cleaned) return -999;
-    
-      // 한글 비율 가산점 크게
-      const hRatio = hangulRatio(cleaned);
-      let score = conf * 0.6 + hRatio * 100;
-    
-      // 길이 보정 (닉네 이름은 대체로 2~6자)
-      if (cleaned.length >= 2 && cleaned.length <= 6) score += 10;
-      else score -= Math.abs(cleaned.length - 4) * 3;
-    
-      return score;
-    }
-    
-    async function recognizeNameWithVariants() {
-      // roiCanvas는 원본 ROI가 이미 들어있다고 가정
-      const tempSoft = document.createElement("canvas");
-      const tempBin = document.createElement("canvas");
-    
-      preprocessNameRoiSoft(roiCanvas, tempSoft);
-      preprocessNameRoiBinary(roiCanvas, tempBin);
-    
-      // 디버그 표시용으로는 soft 버전 먼저 보여주기
-      ocrCanvas.width = tempSoft.width;
-      ocrCanvas.height = tempSoft.height;
-      ocrCanvas.getContext("2d").drawImage(tempSoft, 0, 0);
-    
-      const results = [];
-    
-      // 후보 1: soft(gray)
-      {
-        const ret = await ocrWorker.recognize(tempSoft);
-        results.push({
-          mode: "soft",
-          raw: ret?.data?.text ?? "",
-          conf: ret?.data?.confidence ?? 0
-        });
-      }
-    
-      // 후보 2: binary
-      {
-        const ret = await ocrWorker.recognize(tempBin);
-        results.push({
-          mode: "binary",
-          raw: ret?.data?.text ?? "",
-          conf: ret?.data?.confidence ?? 0
-        });
-      }
-    
-      // 점수 계산
-      let best = null;
-      for (const r of results) {
-        const cleaned = cleanOcrName(r.raw);
-        const score = scoreNameCandidate(cleaned, r.conf);
-        const item = { ...r, cleaned, score };
-        if (!best || item.score > best.score) best = item;
-      }
-    
-      return { best, all: results };
-    }
-
-
-    // -----------------------------
-    // 7) 화면공유 시작/중지
-    // -----------------------------
-    async function startScreenCapture() {
-      try {
-        stopScreenCapture(); // 기존 스트림 정리
-
-        setStatus("화면 공유 권한 요청 중...\n공유 창에서 '창(Window)'를 선택해주세요.");
-
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            frameRate: { ideal: 15, max: 30 }
-          },
-          audio: false
-        });
-
-        captureStream = stream;
-        videoEl.srcObject = stream;
-
-        await new Promise((resolve) => {
-          if (videoEl.readyState >= 1) return resolve();
-          videoEl.onloadedmetadata = () => resolve();
-        });
-
-        const track = stream.getVideoTracks()[0];
-        const settings = track.getSettings ? track.getSettings() : {};
-
-        track.onended = () => {
-          stopScreenCapture();
-          setStatus("공유가 종료되었습니다.");
-        };
-
-        btnStart.disabled = true;
-        btnStop.disabled = false;
-        btnOnce.disabled = false;
-
-        await loadKnownNames();   // optional
-        await initOcrWorker();    // 첫 OCR 전에 미리 로드하면 체감 좋음
-        startOcrLoop();
-
-        setStatus([
-          "화면 감지 준비 완료 ✅",
-          `실제 영상 크기: ${videoEl.videoWidth} x ${videoEl.videoHeight}`,
-          `displaySurface: ${settings.displaySurface || "알 수 없음"}`,
-          "이름 OCR 루프 시작 (900ms 간격)"
-        ].join("\n"));
-
-      } catch (err) {
-        console.error(err);
-
-        if (err && err.name === "NotAllowedError") {
-          setStatus("사용자가 화면 공유 권한을 취소했습니다.");
-        } else if (err && err.name === "NotFoundError") {
-          setStatus("공유 가능한 화면/창을 찾을 수 없습니다.");
-        } else {
-          setStatus("화면 공유 시작 실패: " + (err?.message || String(err)));
-        }
-
-        btnStart.disabled = false;
-        btnStop.disabled = true;
-        btnOnce.disabled = true;
-      }
-    }
-
-    function stopScreenCapture() {
-      stopOcrLoop();
-
-      if (captureStream) {
-        captureStream.getTracks().forEach((track) => track.stop());
-        captureStream = null;
-      }
-
-      videoEl.srcObject = null;
-      btnStart.disabled = false;
-      btnStop.disabled = true;
-      btnOnce.disabled = true;
-      setStatus("중지됨.");
-    }
-
-    // 버튼 연결
-    btnStart.addEventListener("click", startScreenCapture);
-    btnStop.addEventListener("click", stopScreenCapture);
-    btnOnce.addEventListener("click", () => extractNameOnce());
-
-    // 전역 확인용 (원하면 콘솔에서 확인)
-    window.getDetectedName = () => detectedName;
+    })();
   </script>
 </body>
 </html>
